@@ -63,9 +63,15 @@ broker ACL uses one shared `customer` credential for order topics. Per-session
 isolation for seat status/vacate is still enforced by the broker via a static
 ACL rule keyed on each client's MQTT Client Identifier.
 
-**A finished diner keeps their table until someone else needs it, no timer.**
-Finishing a meal just marks a table reclaimable; it's taken back only when a
-new customer actually needs it. There's no "undo" for this signal.
+**A diner keeps their table until someone else needs it - eviction is
+demand-driven, not clock-driven.** Finishing a meal just marks a table
+reclaimable; a session that hasn't finished is only eligible for eviction once
+it's been seated past `max_dining_seconds`. Either way, nothing is evicted
+while the restaurant has room: a table is only reclaimed once another
+customer is actually waiting, and even then the occupant is warned
+(`seat.status.v1` with `state: "warning"`) and given
+`eviction_warning_grace_seconds` to wrap up before it's taken back. There's no
+"undo" for the finished-eating signal itself.
 
 **Order acceptance is announced before cooking starts.** A small
 `order.accepted.v1` event fires right after validation, before the random cook

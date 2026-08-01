@@ -11,6 +11,7 @@
 	import CookingCard from './CookingCard.svelte';
 	import OrderModal from './OrderModal.svelte';
 	import KickedOutScreen from './KickedOutScreen.svelte';
+	import KickWarningBanner from './KickWarningBanner.svelte';
 	import ToastStack from './ToastStack.svelte';
 
 	// 'local' opts into the fully client-side simulation (no broker needed);
@@ -39,6 +40,7 @@
 	<CookingCard />
 	<OrderModal />
 	<KickedOutScreen />
+	<KickWarningBanner />
 	<ToastStack />
 </div>
 

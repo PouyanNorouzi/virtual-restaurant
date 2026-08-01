@@ -47,6 +47,9 @@ export interface RestaurantSnapshot {
 	cookSecondsLeft: number;
 	queueCount: number;
 	toasts: ToastMsg[];
+	/** Seconds left before eviction once the backend has warned this session
+	 *  someone else needs its table; null when no eviction is pending. */
+	kickWarningSecondsLeft: number | null;
 }
 
 /**

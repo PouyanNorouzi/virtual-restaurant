@@ -20,6 +20,7 @@ from src.mqtt.topics import (
     order_topic,
     rejected_topic,
     seating_finished_topic,
+    seating_request_topic,
     seating_status_topic,
     seating_vacate_topic,
 )
@@ -39,6 +40,8 @@ async def backend_task(mosquitto_broker):
         num_tables=1,  # forces the second session to queue, deterministically
         min_delay_seconds=0.1,
         max_delay_seconds=0.2,
+        eviction_warning_grace_seconds=0.2,
+        dawdle_check_interval_seconds=0.2,
     )
     stop_event = asyncio.Event()
     task = asyncio.create_task(run_forever(settings, stop_event))
@@ -181,15 +184,31 @@ async def test_finished_eating_lingers_until_new_request_evicts(mosquitto_broker
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(anext(aiter(client_a.messages)), timeout=1)
 
-        # B requests a seat; since the only table is finished-eating (not
-        # free), B should be seated directly - never queued at all.
-        table_id_for_b = await request_seat_and_wait_assigned(client_b, session_b)
-        assert table_id_for_b == 1
+        # B requests a seat; since the only table belongs to a finished (not
+        # free) session, B queues while A gets warned, then evicted after
+        # its grace period - B is promoted onto the freed table right after.
+        await client_b.subscribe(seating_status_topic(session_b), qos=1)
+        await client_b.publish(seating_request_topic(session_b), payload=b"{}", qos=1)
+        b_queued = json.loads(
+            (await asyncio.wait_for(anext(aiter(client_b.messages)), timeout=5)).payload
+        )
+        assert b_queued == {"schema": "seat.status.v1", "state": "queued", "queue_position": 1}
+
+        a_warning = json.loads(
+            (await asyncio.wait_for(anext(aiter(client_a.messages)), timeout=5)).payload
+        )
+        assert a_warning["state"] == "warning"
+        assert a_warning["grace_seconds"] == pytest.approx(0.2)
 
         a_vacated = json.loads(
             (await asyncio.wait_for(anext(aiter(client_a.messages)), timeout=5)).payload
         )
         assert a_vacated == {"schema": "seat.status.v1", "state": "vacated"}
+
+        b_assigned = json.loads(
+            (await asyncio.wait_for(anext(aiter(client_b.messages)), timeout=5)).payload
+        )
+        assert b_assigned == {"schema": "seat.status.v1", "state": "assigned", "table_id": 1}
 
 
 async def test_order_rejected_for_session_not_seated_at_table(mosquitto_broker, backend_task):

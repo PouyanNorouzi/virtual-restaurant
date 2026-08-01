@@ -10,6 +10,7 @@ class FakeSeatingStatusPublisher:
         self.assigned: list[tuple[str, int]] = []
         self.queued: list[tuple[str, int]] = []
         self.vacated: list[str] = []
+        self.warned: list[str] = []
 
     async def publish_assigned(self, session_id: str, table_id: int) -> None:
         self.assigned.append((session_id, table_id))
@@ -19,6 +20,9 @@ class FakeSeatingStatusPublisher:
 
     async def publish_vacated(self, session_id: str) -> None:
         self.vacated.append(session_id)
+
+    async def publish_warning(self, session_id: str, grace_seconds: float) -> None:
+        self.warned.append(session_id)
 
 
 class FakeOccupancyPublisher:
@@ -31,13 +35,38 @@ class FakeOccupancyPublisher:
         self.snapshots.append((list(occupied_tables), num_tables, queue_length))
 
 
-def make_service(num_tables: int = 2) -> tuple[SeatingService, FakeSeatingStatusPublisher, FakeOccupancyPublisher]:
+# Near-zero so tests can just yield control back to the loop (a bare
+# `await asyncio.sleep(0)`) to let a scheduled eviction run, instead of
+# actually waiting out a real grace period.
+TEST_GRACE_SECONDS = 0
+TEST_MAX_DINING_SECONDS = 10_000  # effectively "never" unless a test overrides it
+
+
+def make_service(
+    num_tables: int = 2,
+    *,
+    max_dining_seconds: float = TEST_MAX_DINING_SECONDS,
+    eviction_warning_grace_seconds: float = TEST_GRACE_SECONDS,
+) -> tuple[SeatingService, FakeSeatingStatusPublisher, FakeOccupancyPublisher]:
     status = FakeSeatingStatusPublisher()
     occupancy = FakeOccupancyPublisher()
     service = SeatingService(
-        num_tables=num_tables, status_publisher=status, occupancy_publisher=occupancy
+        num_tables=num_tables,
+        status_publisher=status,
+        occupancy_publisher=occupancy,
+        max_dining_seconds=max_dining_seconds,
+        eviction_warning_grace_seconds=eviction_warning_grace_seconds,
     )
     return service, status, occupancy
+
+
+async def let_pending_evictions_run() -> None:
+    """Yields control back to the event loop so a _start_eviction task
+    (warning published synchronously, then a TEST_GRACE_SECONDS sleep) gets
+    to actually run and complete.
+    """
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
 
 
 async def test_first_request_assigns_first_free_table_by_index():
@@ -206,12 +235,20 @@ async def test_finished_eating_is_idempotent():
     assert service.is_seated("s1", 1)
 
 
-async def test_finished_eating_with_queue_already_waiting_evicts_immediately():
+async def test_finished_eating_with_queue_already_waiting_warns_then_evicts():
     service, status, _ = make_service(num_tables=1)
     await service.request_seat("s1")
     await service.request_seat("s2")  # queued, table is full
 
     await service.mark_finished_eating("s1")
+    await asyncio.sleep(0)  # let the scheduled warning task publish its warning
+
+    # Not instant - s1 is warned first and still holds the table.
+    assert status.warned == ["s1"]
+    assert not status.vacated
+    assert service.is_seated("s1", 1)
+
+    await let_pending_evictions_run()
 
     assert status.vacated == ["s1"]
     assert not service.is_seated("s1", 1)
@@ -219,14 +256,22 @@ async def test_finished_eating_with_queue_already_waiting_evicts_immediately():
     assert service.queue_length == 0
 
 
-async def test_new_request_evicts_oldest_finished_table_instead_of_queueing():
+async def test_new_request_eventually_reclaims_finished_table_instead_of_waiting_forever():
     service, status, _ = make_service(num_tables=1)
     await service.request_seat("s1")
     await service.mark_finished_eating("s1")  # queue empty, s1 just lingers
 
     await service.request_seat("s2")
+    await asyncio.sleep(0)  # let the scheduled warning task publish its warning
 
-    # s2 gets seated directly - never queued at all.
+    # No free table yet - s2 queues, but s1 gets warned immediately rather
+    # than waiting for the next sweep tick.
+    assert status.queued == [("s2", 1)]
+    assert status.warned == ["s1"]
+    assert not status.vacated
+
+    await let_pending_evictions_run()
+
     assert ("s2", 1) in status.assigned
     assert status.vacated == ["s1"]
     assert service.is_seated("s2", 1)
@@ -256,6 +301,7 @@ async def test_oldest_finished_table_is_evicted_first():
     await service.mark_finished_eating("s1")  # finishes second
 
     await service.request_seat("s3")
+    await let_pending_evictions_run()
 
     assert status.vacated == ["s2"]  # oldest-finished evicted, not s1
     assert service.is_seated("s3", 2)
@@ -276,6 +322,50 @@ async def test_finished_then_explicit_vacate_does_not_double_evict():
     await service.request_seat("s2")
     assert service.is_seated("s2", 1)
     assert status.vacated == ["s1"]  # s1 never appears again
+
+
+async def test_dawdling_session_is_warned_then_evicted_once_someone_needs_the_table():
+    service, status, _ = make_service(num_tables=1, max_dining_seconds=0)
+    await service.request_seat("s1")  # seated, instantly "overdue" (cap is 0)
+
+    await service.request_seat("s2")  # queued -> triggers the overdue check
+    await asyncio.sleep(0)  # let the scheduled warning task publish its warning
+
+    assert status.warned == ["s1"]
+    assert not status.vacated
+    assert service.is_seated("s1", 1)  # not evicted yet - still mid-grace
+
+    await let_pending_evictions_run()
+
+    assert status.vacated == ["s1"]
+    assert service.is_seated("s2", 1)
+
+
+async def test_dawdling_session_is_never_warned_while_nobody_is_waiting():
+    service, status, _ = make_service(num_tables=1, max_dining_seconds=0)
+
+    await service.request_seat("s1")  # seated, instantly "overdue", but alone
+
+    assert not status.warned
+    assert not status.vacated
+    assert service.is_seated("s1", 1)
+
+
+async def test_second_queued_request_does_not_warn_an_already_pending_session():
+    service, status, _ = make_service(num_tables=1, max_dining_seconds=0)
+    await service.request_seat("s1")  # seated, instantly "overdue"
+    await service.request_seat("s2")  # queued, warns s1
+    await service.request_seat("s3")  # also queues - s1 already pending, no re-warn
+    await asyncio.sleep(0)  # let the scheduled warning task publish its warning
+
+    assert status.warned == ["s1"]
+    assert service.queue_length == 2
+
+    await let_pending_evictions_run()
+
+    assert status.vacated == ["s1"]
+    assert service.is_seated("s2", 1)  # FIFO: s2 promoted, not s3
+    assert service.queue_length == 1
 
 
 def test_invalid_num_tables_raises():

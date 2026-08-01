@@ -42,7 +42,7 @@ WebSockets listener.
 | `restaurant/seating/{session_id}/request` | frontend → backend | no | "seat me" |
 | `restaurant/seating/{session_id}/vacate` | frontend → backend | no | leave now, unconditionally (explicit, or via Last Will on a crashed tab) |
 | `restaurant/seating/{session_id}/finished` | frontend → backend | no | "I've eaten", keeps the table unless someone else needs it |
-| `restaurant/seating/{session_id}/status` | backend → that session | no | assigned / queued / vacated |
+| `restaurant/seating/{session_id}/status` | backend → that session | no | assigned / queued / warning / vacated |
 | `restaurant/seating/occupancy` | backend → everyone | **yes** | live occupied-table list + queue length |
 
 QoS 1 everywhere. `session_id` is client-generated (e.g. `crypto.randomUUID()`)
@@ -94,23 +94,29 @@ Reasons: `empty_food_name`, `food_name_too_long`, `unknown_table`,
 **Seat request** (frontend → `seating/{session_id}/request`):
 `{"schema": "seat.request.v1"}`. Idempotent: re-requesting while already
 seated/queued just re-sends current status (how a refreshed tab resyncs). If
-nothing's free, a lingering finished session gets evicted first.
+nothing's free, a lingering finished (or overdue - see below) session gets
+warned and eventually evicted; the new requester queues in the meantime.
 
 **Vacate** (frontend, or the broker via MQTT Last Will, → `vacate`):
 `{"schema": "seat.vacate.v1", "reason": "user_action" | "disconnected"}`.
 Frees the table unconditionally and immediately.
 
 **Finished eating** (frontend → `finished`): `{"schema": "seat.finished.v1"}`.
-Means "done, but keep my table unless someone else needs it." Reclaimed later:
-immediately if someone's already queued, or by the next `request_seat()` that
-finds nothing free. The evicted session gets `{"state": "vacated"}` on its
-status topic either way.
+Means "done, but keep my table unless someone else needs it." A session that
+hasn't sent this is also eligible for eviction once it's been seated past
+`max_dining_seconds` (still ordering/eating too long) - same demand-driven
+rule: nobody's evicted while the restaurant has room. Either way, eviction
+always warns first (`state: "warning"`) and waits
+`eviction_warning_grace_seconds` before actually reclaiming the table. The
+evicted session gets `{"state": "vacated"}` on its status topic once that
+grace period elapses.
 
 **Seat status** (backend → `status`):
 
 ```json
 { "schema": "seat.status.v1", "state": "assigned", "table_id": 2 }
 { "schema": "seat.status.v1", "state": "queued", "queue_position": 3 }
+{ "schema": "seat.status.v1", "state": "warning", "grace_seconds": 20.0 }
 { "schema": "seat.status.v1", "state": "vacated" }
 ```
 

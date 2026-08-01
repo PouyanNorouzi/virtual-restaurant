@@ -61,7 +61,11 @@ async def run_forever(settings: Settings, stop_event: asyncio.Event) -> None:
                     num_tables=settings.num_tables,
                     status_publisher=MqttSeatingStatusPublisher(client),
                     occupancy_publisher=MqttOccupancyPublisher(client),
+                    max_dining_seconds=settings.max_dining_seconds,
+                    eviction_warning_grace_seconds=settings.eviction_warning_grace_seconds,
+                    dawdle_check_interval_seconds=settings.dawdle_check_interval_seconds,
                 )
+                seating_service.start()
                 order_service = OrderService(
                     num_tables=settings.num_tables,
                     min_delay_seconds=settings.min_delay_seconds,

@@ -118,6 +118,11 @@ class MqttSeatingStatusPublisher:
     async def publish_vacated(self, session_id: str) -> None:
         await self._publish(session_id, SeatStatusMessageV1(state="vacated"))
 
+    async def publish_warning(self, session_id: str, grace_seconds: float) -> None:
+        await self._publish(
+            session_id, SeatStatusMessageV1(state="warning", grace_seconds=grace_seconds)
+        )
+
     async def _publish(self, session_id: str, message: SeatStatusMessageV1) -> None:
         try:
             await self._client.publish(

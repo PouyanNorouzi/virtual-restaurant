@@ -140,9 +140,12 @@ class SeatStatusMessageV1(BaseModel):
     """Published by the backend to restaurant/seating/{session_id}/status."""
 
     schema_: str = Field(default="seat.status.v1", alias="schema")
-    state: str  # "assigned" | "queued" | "vacated"
+    state: str  # "assigned" | "queued" | "vacated" | "warning"
     table_id: int | None = None
     queue_position: int | None = None
+    # Only meaningful for state == "warning": how long until the session is
+    # evicted if it doesn't act (leave, or free up the table on its own).
+    grace_seconds: float | None = None
 
     model_config = {"populate_by_name": True}
 

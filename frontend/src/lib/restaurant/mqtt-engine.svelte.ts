@@ -27,9 +27,10 @@ function reasonToMessage(reason: string): string {
 }
 
 interface StatusMessage {
-	state: 'assigned' | 'queued' | 'vacated';
+	state: 'assigned' | 'queued' | 'vacated' | 'warning';
 	table_id?: number;
 	queue_position?: number;
+	grace_seconds?: number;
 }
 
 interface OccupancyMessage {
@@ -71,7 +72,8 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 		cookTotal: 0,
 		cookSecondsLeft: 0,
 		queueCount: 0,
-		toasts: []
+		toasts: [],
+		kickWarningSecondsLeft: null
 	});
 
 	// The session's MQTT Client Identifier MUST equal this session_id - the
@@ -84,6 +86,7 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 	private numTables = 0;
 	private pendingClientOrderId: string | null = null;
 	private cookdownTimer: ReturnType<typeof setInterval> | undefined;
+	private kickWarningTimer: ReturnType<typeof setInterval> | undefined;
 
 	start(): void {
 		const willPayload = JSON.stringify({ schema: 'seat.vacate.v1', reason: 'disconnected' });
@@ -134,6 +137,7 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 
 	destroy(): void {
 		clearInterval(this.cookdownTimer);
+		clearInterval(this.kickWarningTimer);
 		// start() (and thus the pagehide listener) only ever runs client-side
 		// via onMount, but onDestroy can still fire during SSR with no
 		// matching onMount - guard against `window` not existing there.
@@ -255,6 +259,13 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 	}
 
 	private onStatus(msg: StatusMessage): void {
+		if (msg.state === 'warning' && msg.grace_seconds != null) {
+			this.startKickWarning(msg.grace_seconds);
+			return;
+		}
+
+		this.clearKickWarning();
+
 		if (msg.state === 'assigned' && msg.table_id != null) {
 			this.setAssignedTable(msg.table_id);
 			this.state.userTable = msg.table_id - 1;
@@ -274,6 +285,21 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 		this.setAssignedTable(null);
 		this.state.userTable = null;
 		this.state.phase = 'kicked-out';
+	}
+
+	private startKickWarning(graceSeconds: number): void {
+		clearInterval(this.kickWarningTimer);
+		this.state.kickWarningSecondsLeft = Math.ceil(graceSeconds);
+		this.kickWarningTimer = setInterval(() => {
+			const left = (this.state.kickWarningSecondsLeft ?? 0) - 1;
+			this.state.kickWarningSecondsLeft = Math.max(0, left);
+			if (left <= 0) clearInterval(this.kickWarningTimer);
+		}, 1000);
+	}
+
+	private clearKickWarning(): void {
+		clearInterval(this.kickWarningTimer);
+		this.state.kickWarningSecondsLeft = null;
 	}
 
 	private setAssignedTable(tableId: number | null): void {
@@ -338,6 +364,7 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 
 		if (msg.reason === 'not_seated_at_table') {
 			// State desync (e.g. evicted mid-order) - resync from scratch.
+			this.clearKickWarning();
 			this.setAssignedTable(null);
 			this.state.userTable = null;
 			this.state.phase = 'waiting-room';

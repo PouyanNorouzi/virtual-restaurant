@@ -22,12 +22,14 @@ export class LocalRestaurantEngine implements RestaurantEngine {
 		cookTotal: 0,
 		cookSecondsLeft: 0,
 		queueCount: 0,
-		toasts: []
+		toasts: [],
+		kickWarningSecondsLeft: null
 	});
 
 	private npcTimer: ReturnType<typeof setInterval> | undefined;
 	private cookTimer: ReturnType<typeof setInterval> | undefined;
 	private idleTimer: ReturnType<typeof setTimeout> | undefined;
+	private kickWarningTimer: ReturnType<typeof setInterval> | undefined;
 
 	start(): void {
 		this.npcTimer = setInterval(() => this.tickNpc(), 1500);
@@ -37,6 +39,7 @@ export class LocalRestaurantEngine implements RestaurantEngine {
 		clearInterval(this.npcTimer);
 		clearInterval(this.cookTimer);
 		clearTimeout(this.idleTimer);
+		clearInterval(this.kickWarningTimer);
 	}
 
 	dispatch(action: RestaurantAction): void {
@@ -129,17 +132,31 @@ export class LocalRestaurantEngine implements RestaurantEngine {
 		}, 1000);
 	}
 
+	private readonly kickWarningSeconds = 5;
+
 	private onEat(): void {
 		const queueCount = Math.random() < 0.4 ? 0 : 1 + Math.floor(Math.random() * 9);
 		this.state.queueCount = queueCount;
 		this.state.phase = 'post-eat';
 		this.idleTimer = setTimeout(() => {
-			const userTable = this.state.userTable;
-			if (userTable != null) {
-				this.state.tables = this.state.tables.map((t, i) => (i === userTable ? emptyTable() : t));
-			}
-			this.state.userTable = null;
-			this.state.phase = 'kicked-out';
+			this.state.kickWarningSecondsLeft = this.kickWarningSeconds;
+			this.kickWarningTimer = setInterval(() => {
+				const left = (this.state.kickWarningSecondsLeft ?? 0) - 1;
+				if (left <= 0) {
+					clearInterval(this.kickWarningTimer);
+					this.state.kickWarningSecondsLeft = null;
+					const userTable = this.state.userTable;
+					if (userTable != null) {
+						this.state.tables = this.state.tables.map((t, i) =>
+							i === userTable ? emptyTable() : t
+						);
+					}
+					this.state.userTable = null;
+					this.state.phase = 'kicked-out';
+					return;
+				}
+				this.state.kickWarningSecondsLeft = left;
+			}, 1000);
 		}, 20000);
 	}
 }

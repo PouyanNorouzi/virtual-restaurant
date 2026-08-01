@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     max_food_name_len: int = 200
     max_pending_per_table: int = 5
 
+    # Total ordering+eating budget before a seated (not-yet-finished) session
+    # is eligible for eviction, but only once someone else actually needs the
+    # table - see SeatingService's dawdle sweep.
+    max_dining_seconds: float = 300.0
+    eviction_warning_grace_seconds: float = 20.0
+    dawdle_check_interval_seconds: float = 5.0
+
     reconnect_initial_backoff_seconds: float = 1.0
     reconnect_max_backoff_seconds: float = 30.0
 
