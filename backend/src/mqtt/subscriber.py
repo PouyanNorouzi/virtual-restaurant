@@ -22,12 +22,14 @@ from ..domain.models import OrderRequest
 from ..domain.order_service import OrderService
 from ..domain.schemas import (
     OrderMessageV1,
+    SeatFinishedMessageV1,
     SeatRequestMessageV1,
     SeatVacateMessageV1,
     utcnow,
 )
 from ..domain.seating_service import SeatingService
 from .topics import (
+    parse_session_id_from_seating_finished_topic,
     parse_session_id_from_seating_request_topic,
     parse_session_id_from_seating_vacate_topic,
     parse_table_id_from_order_topic,
@@ -68,6 +70,13 @@ async def _handle_one(
         if _validate_payload(topic, raw, SeatVacateMessageV1) is None:
             return
         await seating_service.vacate(session_id)
+        return
+
+    session_id = parse_session_id_from_seating_finished_topic(topic)
+    if session_id is not None:
+        if _validate_payload(topic, raw, SeatFinishedMessageV1) is None:
+            return
+        await seating_service.mark_finished_eating(session_id)
         return
 
     logger.warning(

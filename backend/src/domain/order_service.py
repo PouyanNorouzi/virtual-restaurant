@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
 
-from .models import FoodReady, OrderRequest
+from .models import FoodReady, OrderAccepted, OrderRequest
 from .ports import FoodPublisher, RejectionPublisher, SeatingQuery
 
 logger = logging.getLogger(__name__)
@@ -175,6 +175,14 @@ class OrderService:
                 "table_id": request.table_id,
                 "delay_seconds": delay,
             },
+        )
+
+        await self._publisher.publish_accepted(
+            OrderAccepted(
+                client_order_id=request.client_order_id,
+                table_id=request.table_id,
+                prep_seconds=delay,
+            )
         )
 
         self._pending_by_table[request.table_id].add(order_id)

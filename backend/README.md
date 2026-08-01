@@ -27,8 +27,12 @@ with a WebSockets listener.
   appropriate domain service; `src/mqtt/publisher_adapter.py` turns domain
   events back into JSON on the way out.
 - **`SeatingService`** (`src/domain/seating_service.py`) tracks which
-  session (if any) occupies each table, plus a FIFO queue of sessions
-  waiting for one to free up. **`OrderService`** (`src/domain/order_service.py`)
+  session (if any) occupies each table, a FIFO queue of sessions waiting
+  for one to free up, and which occupied tables belong to sessions that
+  finished eating but haven't been evicted yet — eviction is queue-driven,
+  not timer-driven: a finished session keeps its table until someone else
+  actually needs it (see `mark_finished_eating` and `request_seat`'s
+  finished-table fallback). **`OrderService`** (`src/domain/order_service.py`)
   validates orders (including asking `SeatingService` whether the ordering
   session is actually seated at that table) and simulates cooking. Neither
   has any MQTT/JSON imports, so both are unit-testable with no broker at
@@ -41,10 +45,12 @@ with a WebSockets listener.
 | Topic | Direction | Retained | Purpose |
 | --- | --- | --- | --- |
 | `restaurant/table/{table_id}/order` | frontend → backend | no | place an order |
+| `restaurant/table/{table_id}/order/accepted` | backend → frontend | no | order passed validation, cooking started |
 | `restaurant/table/{table_id}/food` | backend → frontend | no | order is ready |
 | `restaurant/table/{table_id}/order/rejected` | backend → frontend | no | order failed validation |
 | `restaurant/seating/{session_id}/request` | frontend → backend | no | "seat me" |
-| `restaurant/seating/{session_id}/vacate` | frontend → backend | no | leave (explicit, or via Last Will on a crashed tab) |
+| `restaurant/seating/{session_id}/vacate` | frontend → backend | no | leave now, unconditionally (explicit, or via Last Will on a crashed tab) |
+| `restaurant/seating/{session_id}/finished` | frontend → backend | no | "I've eaten" — keeps the table unless someone else needs it |
 | `restaurant/seating/{session_id}/status` | backend → that session | no | assigned / queued / vacated |
 | `restaurant/seating/occupancy` | backend → everyone | **yes** | live occupied-table list + queue length, for a lobby view |
 
@@ -69,6 +75,12 @@ malformed order (including either id missing) fails schema validation and
 is dropped (logged, not published to `.../order/rejected` — see
 [Known limitations](#known-limitations)).
 
+**Accepted** (backend publishes to `restaurant/table/{table_id}/order/accepted`, immediately after validation succeeds and before the cook delay starts — the whole reason this event exists is that the backend never tells the frontend how long cooking will take otherwise; `prep_seconds` here is the real chosen delay, not a placeholder, and matches the eventual FOOD event's `prep_seconds` exactly):
+
+```json
+{ "schema": "order.accepted.v1", "client_order_id": "echoed-back-from-the-order", "table_id": 2, "prep_seconds": 23.4 }
+```
+
 **FOOD** (backend publishes to `restaurant/table/{table_id}/food`):
 
 ```json
@@ -92,9 +104,11 @@ is dropped (logged, not published to `.../order/rejected` — see
 Reasons: `empty_food_name`, `food_name_too_long`, `unknown_table`,
 `too_many_pending_orders`, `not_seated_at_table`.
 
-**Seat request** (frontend publishes to `restaurant/seating/{session_id}/request`): `{"schema": "seat.request.v1"}` — no other fields; `session_id` lives in the topic. Idempotent: requesting again while already seated/queued just re-sends the current status (this is also how a refreshed browser tab resyncs, with no separate "query" topic needed).
+**Seat request** (frontend publishes to `restaurant/seating/{session_id}/request`): `{"schema": "seat.request.v1"}` — no other fields; `session_id` lives in the topic. Idempotent: requesting again while already seated/queued just re-sends the current status (this is also how a refreshed browser tab resyncs, with no separate "query" topic needed). If nothing is free, a session that finished eating but is only lingering (see below) gets evicted to make room for the new requester before anyone is enqueued.
 
-**Vacate** (frontend publishes, or the broker publishes on that client's behalf via MQTT Last Will — see below, to `restaurant/seating/{session_id}/vacate`): `{"schema": "seat.vacate.v1", "reason": "user_action" | "disconnected"}` — `reason` is log-only, never branched on; an explicit vacate and an LWT-triggered one hit the identical code path.
+**Vacate** (frontend publishes, or the broker publishes on that client's behalf via MQTT Last Will — see below, to `restaurant/seating/{session_id}/vacate`): `{"schema": "seat.vacate.v1", "reason": "user_action" | "disconnected"}` — `reason` is log-only, never branched on; an explicit vacate and an LWT-triggered one hit the identical code path. Frees the table *unconditionally and immediately*, regardless of whether anyone's waiting.
+
+**Finished eating** (frontend publishes to `restaurant/seating/{session_id}/finished`): `{"schema": "seat.finished.v1"}`. Distinct from vacate on purpose: this means "I'm done, but don't take my table unless someone else needs it" — a session that finishes eating with nobody waiting just keeps sitting there indefinitely; the table is only reclaimed later, either the moment someone is *already* queued when this arrives, or by a later `request_seat()` finding nothing free and evicting the oldest finished-but-lingering table instead of enqueueing the new arrival. Either way the evicted session receives `{"state": "vacated"}` on its own status topic — the backend doesn't distinguish "you left" from "you got kicked out" at the protocol level; the frontend infers the latter from receiving `vacated` while it's still sitting in a "finished eating" phase.
 
 **Seat status** (backend publishes to `restaurant/seating/{session_id}/status`):
 
@@ -161,21 +175,28 @@ pytest -m integration     # + integration/concurrency tests (spins up a real
   covers the happy path, every validation failure (including
   `not_seated_at_table` via a fake `SeatingQuery`), concurrent orders
   across/within tables, the per-table backpressure cap, duplicate-id
-  dropping, and task cleanup/shutdown. `test_seating_service.py` covers
-  first-free-by-index assignment, FIFO queueing, idempotent re-requests,
-  vacate + auto-promotion, canceling a queued wait, the vacate-when-neither
-  no-op (the case that makes LWT safe), and a concurrency test asserting no
-  table is ever double-booked.
+  dropping, task cleanup/shutdown, and that the `order.accepted.v1` event
+  is published synchronously with a `prep_seconds` that later matches the
+  FOOD event exactly. `test_seating_service.py` covers first-free-by-index
+  assignment, FIFO queueing, idempotent re-requests, vacate + auto-promotion,
+  canceling a queued wait, the vacate-when-neither no-op (the case that
+  makes LWT safe), a concurrency test asserting no table is ever
+  double-booked, and the full finished-eating eviction matrix: no eviction
+  while the queue is empty, immediate eviction when someone's already
+  waiting, a later request reclaiming the oldest finished-but-lingering
+  table instead of enqueueing, preferring a genuinely free table over
+  evicting one, and an explicit vacate after "finished" not double-firing.
 - **Integration tests** (`test/integration/`) spin up a real Mosquitto
   container (same `mosquitto.conf`/`acl.conf` as production).
   `test_seating_flow.py` exercises the full request → assign → order →
-  vacate → auto-reassign cycle, the `not_seated_at_table` rejection over a
-  real broker, `%c`-pattern isolation between two sessions' seating topics,
-  and the LWT-triggered auto-vacate. `test_acl_enforcement.py` documents
-  that the broker now deliberately *allows* any customer to publish to any
-  table's order topic (see [Security](#security)) while still blocking
-  forged FOOD events. `test_reconnect.py` verifies recovery after a broker
-  restart.
+  vacate → auto-reassign cycle, the `order.accepted.v1` → FOOD delay match
+  over a real broker, the "finished eating lingers until reclaimed" flow,
+  the `not_seated_at_table` rejection, `%c`-pattern isolation between two
+  sessions' seating topics, and the LWT-triggered auto-vacate.
+  `test_acl_enforcement.py` documents that the broker now deliberately
+  *allows* any customer to publish to any table's order topic (see
+  [Security](#security)) while still blocking forged FOOD events.
+  `test_reconnect.py` verifies recovery after a broker restart.
 - **Concurrency test** (`test/concurrency/`) seats four sessions onto four
   distinct real tables concurrently, then fires two concurrent orders per
   session, asserting every order gets exactly one correctly-matched food
@@ -272,10 +293,14 @@ not the chosen design.
   subscribed yet has no other way to learn current occupancy (unlike seat
   status, which can always be resynced on demand via `request_seat`'s
   idempotency).
-- **Frontend integration is a separate follow-up.** The existing
-  `frontend/src/lib/restaurant/*` code implements a different, more
-  elaborate local-only simulation (with fake NPC diners to simulate a busy
-  restaurant, since it has no real backend) than the real seat-assignment
-  model this backend now implements. Wiring an MQTT client into the
-  frontend — including generating a `session_id`/Client Identifier per tab
-  and setting the Last Will described above — is not yet done.
+- **A session can't "un-finish."** Once `mark_finished_eating` is called,
+  there's no protocol message to cancel it — the only way back to normal
+  occupancy is a fresh `request_seat` after being evicted. This matches the
+  product intent (finishing a meal is a one-way signal) but is worth
+  naming as an intentional simplification, not an oversight.
+- **Frontend integration**: `frontend/src/lib/restaurant/mqtt-engine.svelte.ts`
+  implements this contract (MQTT.js, `$env/static/public` for the broker URL
+  and shared `customer` password, a `session_id`/Client Identifier generated
+  per tab, and the Last Will described above). The original fully local,
+  fake-NPC simulation (`local-engine.svelte.ts`) is kept as an offline/demo
+  fallback, selectable via `PUBLIC_ENGINE_MODE=local` — see `frontend/README.md`.

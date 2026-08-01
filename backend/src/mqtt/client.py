@@ -19,6 +19,7 @@ from .publisher_adapter import (
 from .subscriber import handle_messages
 from .topics import (
     ORDER_SUBSCRIBE_FILTER,
+    SEATING_FINISHED_SUBSCRIBE_FILTER,
     SEATING_REQUEST_SUBSCRIBE_FILTER,
     SEATING_VACATE_SUBSCRIBE_FILTER,
 )
@@ -54,6 +55,7 @@ async def run_forever(settings: Settings, stop_event: asyncio.Event) -> None:
                 await client.subscribe(ORDER_SUBSCRIBE_FILTER, qos=1)
                 await client.subscribe(SEATING_REQUEST_SUBSCRIBE_FILTER, qos=1)
                 await client.subscribe(SEATING_VACATE_SUBSCRIBE_FILTER, qos=1)
+                await client.subscribe(SEATING_FINISHED_SUBSCRIBE_FILTER, qos=1)
 
                 seating_service = SeatingService(
                     num_tables=settings.num_tables,

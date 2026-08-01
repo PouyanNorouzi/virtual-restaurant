@@ -175,6 +175,109 @@ async def test_concurrent_requests_assign_each_table_exactly_once():
     assert service.queue_length == 6
 
 
+async def test_finished_eating_with_empty_queue_keeps_the_table():
+    service, status, occupancy = make_service(num_tables=1)
+    await service.request_seat("s1")
+    occupancy.snapshots.clear()
+
+    await service.mark_finished_eating("s1")
+
+    assert not status.vacated  # not evicted - nobody's waiting
+    assert service.is_seated("s1", 1)
+    assert not occupancy.snapshots  # nothing about occupancy changed
+
+
+async def test_finished_eating_is_noop_if_not_seated():
+    service, status, _ = make_service(num_tables=1)
+
+    await service.mark_finished_eating("ghost")
+
+    assert not status.vacated
+
+
+async def test_finished_eating_is_idempotent():
+    service, status, _ = make_service(num_tables=1)
+    await service.request_seat("s1")
+
+    await service.mark_finished_eating("s1")
+    await service.mark_finished_eating("s1")  # duplicate signal, e.g. redelivered
+
+    assert not status.vacated
+    assert service.is_seated("s1", 1)
+
+
+async def test_finished_eating_with_queue_already_waiting_evicts_immediately():
+    service, status, _ = make_service(num_tables=1)
+    await service.request_seat("s1")
+    await service.request_seat("s2")  # queued, table is full
+
+    await service.mark_finished_eating("s1")
+
+    assert status.vacated == ["s1"]
+    assert not service.is_seated("s1", 1)
+    assert service.is_seated("s2", 1)
+    assert service.queue_length == 0
+
+
+async def test_new_request_evicts_oldest_finished_table_instead_of_queueing():
+    service, status, _ = make_service(num_tables=1)
+    await service.request_seat("s1")
+    await service.mark_finished_eating("s1")  # queue empty, s1 just lingers
+
+    await service.request_seat("s2")
+
+    # s2 gets seated directly - never queued at all.
+    assert ("s2", 1) in status.assigned
+    assert status.vacated == ["s1"]
+    assert service.is_seated("s2", 1)
+    assert not service.is_seated("s1", 1)
+    assert service.queue_length == 0
+
+
+async def test_new_request_prefers_free_table_over_evicting_a_finished_one():
+    service, status, _ = make_service(num_tables=2)
+    await service.request_seat("s1")
+    await service.mark_finished_eating("s1")  # table 1 finished but lingering
+
+    await service.request_seat("s2")
+
+    # Table 2 is free, so s2 goes there - s1 is left alone.
+    assert ("s2", 2) in status.assigned
+    assert not status.vacated
+    assert service.is_seated("s1", 1)
+    assert service.is_seated("s2", 2)
+
+
+async def test_oldest_finished_table_is_evicted_first():
+    service, status, _ = make_service(num_tables=2)
+    await service.request_seat("s1")
+    await service.request_seat("s2")
+    await service.mark_finished_eating("s2")  # finishes first
+    await service.mark_finished_eating("s1")  # finishes second
+
+    await service.request_seat("s3")
+
+    assert status.vacated == ["s2"]  # oldest-finished evicted, not s1
+    assert service.is_seated("s3", 2)
+    assert service.is_seated("s1", 1)  # untouched
+
+
+async def test_finished_then_explicit_vacate_does_not_double_evict():
+    service, status, _ = make_service(num_tables=1)
+    await service.request_seat("s1")
+    await service.mark_finished_eating("s1")  # lingers, queue empty
+
+    await service.vacate("s1")  # explicit leave before anyone reclaimed it
+
+    assert status.vacated == ["s1"]
+    assert service.occupied_count == 0
+
+    # A later request must not find a stale "finished" entry for s1.
+    await service.request_seat("s2")
+    assert service.is_seated("s2", 1)
+    assert status.vacated == ["s1"]  # s1 never appears again
+
+
 def test_invalid_num_tables_raises():
     with pytest.raises(ValueError):
         make_service(num_tables=0)

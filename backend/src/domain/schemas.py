@@ -65,6 +65,21 @@ class OrderMessageV1(BaseModel):
         return _validate_id_field(value, "session_id", SESSION_ID_MAX_LEN)
 
 
+class OrderAcceptedMessageV1(BaseModel):
+    """Published to restaurant/table/{table_id}/order/accepted immediately
+    after an order passes validation, before the cook delay starts - lets
+    the frontend render an accurate countdown instead of only learning the
+    duration retroactively once FoodMessageV1 arrives.
+    """
+
+    schema_: str = Field(default="order.accepted.v1", alias="schema")
+    client_order_id: str
+    table_id: int
+    prep_seconds: float
+
+    model_config = {"populate_by_name": True}
+
+
 class FoodMessageV1(BaseModel):
     schema_: str = Field(default="food.v1", alias="schema")
     order_id: str
@@ -107,6 +122,16 @@ class SeatVacateMessageV1(BaseModel):
     # Log-only context (which of the two above triggered it); never
     # branched on, since SeatingService.vacate() treats both identically.
     reason: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class SeatFinishedMessageV1(BaseModel):
+    """Published to restaurant/seating/{session_id}/finished. "I've eaten" -
+    does NOT free the table by itself; see SeatingService.mark_finished_eating.
+    """
+
+    schema_: str = Field(default="seat.finished.v1", alias="schema")
 
     model_config = {"populate_by_name": True}
 

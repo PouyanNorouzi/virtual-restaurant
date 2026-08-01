@@ -2,12 +2,17 @@
 
 Topic layout:
     restaurant/table/{table_id}/order              (frontend -> backend)
+    restaurant/table/{table_id}/order/accepted     (backend -> frontend)
     restaurant/table/{table_id}/food               (backend -> frontend)
     restaurant/table/{table_id}/order/rejected     (backend -> frontend)
     restaurant/seating/{session_id}/request        (frontend -> backend)
     restaurant/seating/{session_id}/vacate         (frontend -> backend, or
                                                      the broker itself via
                                                      that client's Last Will)
+    restaurant/seating/{session_id}/finished       (frontend -> backend;
+                                                     "I've eaten" - doesn't
+                                                     free the table unless
+                                                     someone else needs it)
     restaurant/seating/{session_id}/status         (backend -> that session)
     restaurant/seating/occupancy                   (backend -> everyone, retained)
 
@@ -20,11 +25,16 @@ to its own seating topics - see mosquitto/acl.conf.
 ORDER_SUBSCRIBE_FILTER = "restaurant/table/+/order"
 SEATING_REQUEST_SUBSCRIBE_FILTER = "restaurant/seating/+/request"
 SEATING_VACATE_SUBSCRIBE_FILTER = "restaurant/seating/+/vacate"
+SEATING_FINISHED_SUBSCRIBE_FILTER = "restaurant/seating/+/finished"
 OCCUPANCY_TOPIC = "restaurant/seating/occupancy"
 
 
 def order_topic(table_id: int) -> str:
     return f"restaurant/table/{table_id}/order"
+
+
+def order_accepted_topic(table_id: int) -> str:
+    return f"restaurant/table/{table_id}/order/accepted"
 
 
 def food_topic(table_id: int) -> str:
@@ -41,6 +51,10 @@ def seating_request_topic(session_id: str) -> str:
 
 def seating_vacate_topic(session_id: str) -> str:
     return f"restaurant/seating/{session_id}/vacate"
+
+
+def seating_finished_topic(session_id: str) -> str:
+    return f"restaurant/seating/{session_id}/finished"
 
 
 def seating_status_topic(session_id: str) -> str:
@@ -81,3 +95,8 @@ def parse_session_id_from_seating_request_topic(topic: str) -> str | None:
 def parse_session_id_from_seating_vacate_topic(topic: str) -> str | None:
     """Extracts {session_id} from "restaurant/seating/{session_id}/vacate"."""
     return _parse_session_id_from_seating_topic(topic, "vacate")
+
+
+def parse_session_id_from_seating_finished_topic(topic: str) -> str | None:
+    """Extracts {session_id} from "restaurant/seating/{session_id}/finished"."""
+    return _parse_session_id_from_seating_topic(topic, "finished")

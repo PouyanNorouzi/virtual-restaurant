@@ -16,6 +16,18 @@ class OrderRequest:
 
 
 @dataclass(frozen=True)
+class OrderAccepted:
+    """Emitted immediately after a valid order is scheduled, before cooking
+    starts - carries the chosen delay so a client can render a live
+    countdown instead of only learning the duration retroactively.
+    """
+
+    client_order_id: str
+    table_id: int
+    prep_seconds: float
+
+
+@dataclass(frozen=True)
 class FoodReady:
     """Emitted once an order has finished "cooking"."""
 

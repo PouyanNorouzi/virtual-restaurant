@@ -8,14 +8,21 @@ import logging
 
 import aiomqtt
 
-from ..domain.models import FoodReady
+from ..domain.models import FoodReady, OrderAccepted
 from ..domain.schemas import (
     FoodMessageV1,
     OccupancyMessageV1,
+    OrderAcceptedMessageV1,
     RejectionMessageV1,
     SeatStatusMessageV1,
 )
-from .topics import OCCUPANCY_TOPIC, food_topic, rejected_topic, seating_status_topic
+from .topics import (
+    OCCUPANCY_TOPIC,
+    food_topic,
+    order_accepted_topic,
+    rejected_topic,
+    seating_status_topic,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +32,29 @@ QOS_AT_LEAST_ONCE = 1
 class MqttFoodPublisher:
     def __init__(self, client: aiomqtt.Client) -> None:
         self._client = client
+
+    async def publish_accepted(self, accepted: OrderAccepted) -> None:
+        message = OrderAcceptedMessageV1(
+            client_order_id=accepted.client_order_id,
+            table_id=accepted.table_id,
+            prep_seconds=accepted.prep_seconds,
+        )
+        try:
+            await self._client.publish(
+                order_accepted_topic(accepted.table_id),
+                payload=message.model_dump_json(by_alias=True),
+                qos=QOS_AT_LEAST_ONCE,
+                retain=False,
+            )
+        except aiomqtt.MqttError:
+            logger.exception(
+                "failed to publish order-accepted event",
+                extra={
+                    "event": "order_accepted_publish_failed",
+                    "client_order_id": accepted.client_order_id,
+                    "table_id": accepted.table_id,
+                },
+            )
 
     async def publish_food(self, food: FoodReady) -> None:
         message = FoodMessageV1(

@@ -16,8 +16,10 @@ from src.config import Settings
 from src.mqtt.client import run_forever
 from src.mqtt.topics import (
     food_topic,
+    order_accepted_topic,
     order_topic,
     rejected_topic,
+    seating_finished_topic,
     seating_status_topic,
     seating_vacate_topic,
 )
@@ -112,6 +114,82 @@ async def test_request_assign_order_vacate_and_requeue_flow(mosquitto_broker, ba
             (await asyncio.wait_for(anext(aiter(client_b.messages)), timeout=5)).payload
         )
         assert food_b["food_name"] == "udon"
+
+
+async def test_order_accepted_event_arrives_before_food_with_matching_delay(
+    mosquitto_broker, backend_task
+):
+    session_id = "seat-flow-accepted"
+    async with aiomqtt.Client(
+        hostname=mosquitto_broker["host"],
+        port=mosquitto_broker["port"],
+        username="customer",
+        password=mosquitto_broker["password"],
+        identifier=session_id,
+    ) as client:
+        table_id = await request_seat_and_wait_assigned(client, session_id)
+
+        await client.subscribe(order_accepted_topic(table_id), qos=1)
+        await client.subscribe(food_topic(table_id), qos=1)
+        await client.publish(
+            order_topic(table_id),
+            payload=json.dumps(
+                {"food_name": "gyoza", "client_order_id": "order-acc", "session_id": session_id}
+            ),
+            qos=1,
+        )
+
+        accepted = json.loads(
+            (await asyncio.wait_for(anext(aiter(client.messages)), timeout=5)).payload
+        )
+        assert accepted["schema"] == "order.accepted.v1"
+        assert accepted["client_order_id"] == "order-acc"
+        assert accepted["table_id"] == table_id
+        assert backend_task.min_delay_seconds <= accepted["prep_seconds"] <= backend_task.max_delay_seconds
+
+        food = json.loads(
+            (await asyncio.wait_for(anext(aiter(client.messages)), timeout=5)).payload
+        )
+        assert food["prep_seconds"] == accepted["prep_seconds"]
+
+
+async def test_finished_eating_lingers_until_new_request_evicts(mosquitto_broker, backend_task):
+    session_a, session_b = "seat-finish-a", "seat-finish-b"
+    async with (
+        aiomqtt.Client(
+            hostname=mosquitto_broker["host"],
+            port=mosquitto_broker["port"],
+            username="customer",
+            password=mosquitto_broker["password"],
+            identifier=session_a,
+        ) as client_a,
+        aiomqtt.Client(
+            hostname=mosquitto_broker["host"],
+            port=mosquitto_broker["port"],
+            username="customer",
+            password=mosquitto_broker["password"],
+            identifier=session_b,
+        ) as client_b,
+    ):
+        table_id = await request_seat_and_wait_assigned(client_a, session_a)
+        assert table_id == 1
+
+        await client_a.subscribe(seating_status_topic(session_a), qos=1)
+        await client_a.publish(seating_finished_topic(session_a), payload=b"{}", qos=1)
+
+        # Nobody's waiting yet, so A keeps the table - no status update at all.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(anext(aiter(client_a.messages)), timeout=1)
+
+        # B requests a seat; since the only table is finished-eating (not
+        # free), B should be seated directly - never queued at all.
+        table_id_for_b = await request_seat_and_wait_assigned(client_b, session_b)
+        assert table_id_for_b == 1
+
+        a_vacated = json.loads(
+            (await asyncio.wait_for(anext(aiter(client_a.messages)), timeout=5)).payload
+        )
+        assert a_vacated == {"schema": "seat.status.v1", "state": "vacated"}
 
 
 async def test_order_rejected_for_session_not_seated_at_table(mosquitto_broker, backend_task):

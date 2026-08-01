@@ -5,7 +5,9 @@ from pydantic import ValidationError
 from src.domain.schemas import (
     FoodMessageV1,
     OccupancyMessageV1,
+    OrderAcceptedMessageV1,
     OrderMessageV1,
+    SeatFinishedMessageV1,
     SeatRequestMessageV1,
     SeatStatusMessageV1,
     SeatVacateMessageV1,
@@ -104,10 +106,23 @@ def test_food_message_round_trips_with_schema_alias():
     assert '"schema":"food.v1"' in dumped.replace(" ", "")
 
 
+def test_order_accepted_message_round_trips():
+    msg = OrderAcceptedMessageV1(client_order_id="c1", table_id=2, prep_seconds=14.2)
+    dumped = msg.model_dump_json(by_alias=True)
+    assert '"schema":"order.accepted.v1"' in dumped.replace(" ", "")
+    assert '"table_id":2' in dumped.replace(" ", "")
+
+
 def test_seat_request_message_defaults_schema_tag():
     msg = SeatRequestMessageV1.model_validate_json("{}")
     dumped = msg.model_dump_json(by_alias=True)
     assert '"schema":"seat.request.v1"' in dumped.replace(" ", "")
+
+
+def test_seat_finished_message_defaults_schema_tag():
+    msg = SeatFinishedMessageV1.model_validate_json("{}")
+    dumped = msg.model_dump_json(by_alias=True)
+    assert '"schema":"seat.finished.v1"' in dumped.replace(" ", "")
 
 
 def test_seat_vacate_message_reason_is_optional():

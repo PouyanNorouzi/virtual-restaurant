@@ -5,10 +5,11 @@ here) is what lets OrderService be unit tested with no broker involved.
 
 from typing import Protocol
 
-from .models import FoodReady
+from .models import FoodReady, OrderAccepted
 
 
 class FoodPublisher(Protocol):
+    async def publish_accepted(self, accepted: OrderAccepted) -> None: ...
     async def publish_food(self, food: FoodReady) -> None: ...
 
 

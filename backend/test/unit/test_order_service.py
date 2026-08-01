@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from src.domain.models import FoodReady, OrderRequest
+from src.domain.models import FoodReady, OrderAccepted, OrderRequest
 from src.domain.order_service import OrderService
 
 # Real (but tiny) delays are used instead of mocking asyncio.sleep, so these
@@ -14,7 +14,11 @@ MAX_DELAY = 0.02
 
 class FakeFoodPublisher:
     def __init__(self) -> None:
+        self.accepted: list[OrderAccepted] = []
         self.published: list[FoodReady] = []
+
+    async def publish_accepted(self, accepted: OrderAccepted) -> None:
+        self.accepted.append(accepted)
 
     async def publish_food(self, food: FoodReady) -> None:
         self.published.append(food)
@@ -103,6 +107,31 @@ async def test_happy_path_publishes_food_matching_order():
     assert food.food_name == "ramen"  # whitespace trimmed
     assert food.client_order_id == "abc"
     assert MIN_DELAY <= food.prep_seconds <= MAX_DELAY
+
+
+async def test_accepted_event_is_published_before_food_with_matching_delay():
+    service, publisher, _ = make_service()
+    await service.handle_order(make_request(table_id=3, client_order_id="acc-1"))
+
+    # publish_accepted happens synchronously in handle_order, before the
+    # cook task is even scheduled - no need to wait_until for it.
+    assert len(publisher.accepted) == 1
+    accepted = publisher.accepted[0]
+    assert accepted.table_id == 3
+    assert accepted.client_order_id == "acc-1"
+    assert MIN_DELAY <= accepted.prep_seconds <= MAX_DELAY
+
+    await wait_until(lambda: len(publisher.published) == 1)
+    # The delay announced up front must match what actually happened.
+    assert publisher.published[0].prep_seconds == accepted.prep_seconds
+
+
+async def test_accepted_event_is_not_published_for_rejected_orders():
+    service, publisher, rejections = make_service()
+    await service.handle_order(make_request(food_name="   "))
+    await wait_until(lambda: len(rejections.rejections) == 1)
+
+    assert not publisher.accepted
 
 
 async def test_empty_food_name_is_rejected():
