@@ -11,12 +11,11 @@ import subprocess
 
 import aiomqtt
 import pytest
+from src.mqtt.topics import seating_request_topic, seating_status_topic
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
-from src.mqtt.topics import seating_request_topic, seating_status_topic
-
-BACKEND_DIR = pathlib.Path(__file__).resolve().parents[2]
+BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
 TEST_PASSWORD = "test-password"
 # Only two accounts now: the backend, and the single shared "customer" role
 # every browser client authenticates as. Per-session isolation for seating
@@ -67,9 +66,8 @@ def mosquitto_passwd_file(tmp_path_factory):
     return passwd_path
 
 
-@pytest.fixture(scope="session")
-def mosquitto_broker(mosquitto_passwd_file):
-    container = (
+def _new_mosquitto_container(passwd_file: pathlib.Path) -> DockerContainer:
+    return (
         DockerContainer("eclipse-mosquitto:2")
         .with_volume_mapping(
             str(BACKEND_DIR / "mosquitto" / "mosquitto.conf"),
@@ -79,9 +77,34 @@ def mosquitto_broker(mosquitto_passwd_file):
         .with_volume_mapping(
             str(BACKEND_DIR / "mosquitto" / "acl.conf"), "/mosquitto/config/acl.conf", "ro"
         )
-        .with_volume_mapping(str(mosquitto_passwd_file), "/mosquitto/config/passwd", "ro")
+        .with_volume_mapping(str(passwd_file), "/mosquitto/config/passwd", "ro")
         .with_exposed_ports(1883, 9001)
     )
+
+
+@pytest.fixture(scope="session")
+def mosquitto_broker(mosquitto_passwd_file):
+    container = _new_mosquitto_container(mosquitto_passwd_file)
+    with container:
+        wait_for_logs(container, "mosquitto version .* running", timeout=30)
+        host = container.get_container_host_ip()
+        port = int(container.get_exposed_port(1883))
+        yield {
+            "host": host,
+            "port": port,
+            "password": TEST_PASSWORD,
+            "container": container,
+        }
+
+
+@pytest.fixture
+def restartable_mosquitto_broker(mosquitto_passwd_file):
+    """A dedicated, function-scoped broker - separate from the session-scoped
+    `mosquitto_broker` every other test shares. Only for tests that need to
+    stop/restart/kill the broker itself: if a restart doesn't come back
+    cleanly, that must not take down every other test sharing one instance.
+    """
+    container = _new_mosquitto_container(mosquitto_passwd_file)
     with container:
         wait_for_logs(container, "mosquitto version .* running", timeout=30)
         host = container.get_container_host_ip()

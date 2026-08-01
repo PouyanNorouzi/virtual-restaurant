@@ -24,7 +24,7 @@ from src.mqtt.topics import (
     seating_vacate_topic,
 )
 
-from .conftest import request_seat_and_wait_assigned
+from ..conftest import request_seat_and_wait_assigned
 
 pytestmark = pytest.mark.integration
 

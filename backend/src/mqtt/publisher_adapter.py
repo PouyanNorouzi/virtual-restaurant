@@ -122,7 +122,11 @@ class MqttSeatingStatusPublisher:
         try:
             await self._client.publish(
                 seating_status_topic(session_id),
-                payload=message.model_dump_json(by_alias=True),
+                # exclude_none: table_id/queue_position are only meaningful
+                # for "assigned"/"queued" respectively - without this, every
+                # status message would carry both as null, which doesn't
+                # match the payload contract documented in README.md.
+                payload=message.model_dump_json(by_alias=True, exclude_none=True),
                 qos=QOS_AT_LEAST_ONCE,
                 # Not retained: request_seat() is idempotent, so a client
                 # that reconnects and missed its own status update can just

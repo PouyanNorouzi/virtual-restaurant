@@ -15,7 +15,7 @@ from src.config import Settings
 from src.mqtt.client import run_forever
 from src.mqtt.topics import food_topic, order_topic
 
-from .conftest import request_seat_and_wait_assigned
+from ..conftest import request_seat_and_wait_assigned
 
 pytestmark = pytest.mark.integration
 
