@@ -1,7 +1,17 @@
-export type TableOccupant = 'npc' | 'user' | null;
+/**
+ * 'occupied' means some other real customer is there - the backend never
+ * exposes another customer's identity, only which table ids are occupied
+ * (see restaurant/seating/occupancy in backend/README.md). LocalRestaurantEngine
+ * still uses this value for its fake NPC diners, matching the same visual
+ * treatment ("someone else is here").
+ */
+export type TableOccupant = 'occupied' | 'user' | null;
 
 export interface Table {
 	occupant: TableOccupant;
+	/** Only meaningful for LocalRestaurantEngine's fake NPC departure timer;
+	 *  always null when driven by MqttRestaurantEngine, since the backend
+	 *  never reveals when another real customer might leave. */
 	dineUntil: number | null;
 }
 

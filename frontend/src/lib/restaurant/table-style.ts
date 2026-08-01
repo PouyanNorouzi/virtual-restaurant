@@ -14,7 +14,7 @@ export function tableStyle(table: Table, index: number, userTable: number | null
 		label: index + 1,
 		bg: isUser
 			? 'oklch(0.35 0.09 25)'
-			: table.occupant === 'npc'
+			: table.occupant === 'occupied'
 				? 'oklch(0.30 0.05 60)'
 				: 'oklch(0.22 0.02 40)',
 		border: isUser ? '2px solid oklch(0.78 0.13 85)' : '1px solid oklch(0.34 0.02 40)',

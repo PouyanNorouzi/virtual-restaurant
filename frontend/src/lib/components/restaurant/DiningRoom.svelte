@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import { PUBLIC_ENGINE_MODE } from '$env/static/public';
 	import { LocalRestaurantEngine } from '$lib/restaurant/local-engine.svelte';
+	import { MqttRestaurantEngine } from '$lib/restaurant/mqtt-engine.svelte';
 	import { setRestaurantContext } from '$lib/restaurant/context';
 	import RestaurantHeader from './RestaurantHeader.svelte';
 	import TableFloor from './TableFloor.svelte';
@@ -11,7 +13,10 @@
 	import KickedOutScreen from './KickedOutScreen.svelte';
 	import ToastStack from './ToastStack.svelte';
 
-	const engine = new LocalRestaurantEngine();
+	// 'local' opts into the fully client-side simulation (no broker needed);
+	// anything else, including unset, uses the real networked backend.
+	const engine =
+		PUBLIC_ENGINE_MODE === 'local' ? new LocalRestaurantEngine() : new MqttRestaurantEngine();
 	setRestaurantContext(engine);
 
 	onMount(() => engine.start());

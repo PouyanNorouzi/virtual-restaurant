@@ -69,9 +69,9 @@ export class LocalRestaurantEngine implements RestaurantEngine {
 	private tickNpc(): void {
 		const now = Date.now();
 		const tables = this.state.tables.map((t) => {
-			if (t.occupant === 'npc' && t.dineUntil && now > t.dineUntil) return emptyTable();
+			if (t.occupant === 'occupied' && t.dineUntil && now > t.dineUntil) return emptyTable();
 			if (!t.occupant && Math.random() < 0.3) {
-				return { occupant: 'npc' as const, dineUntil: now + 6000 + Math.random() * 10000 };
+				return { occupant: 'occupied' as const, dineUntil: now + 6000 + Math.random() * 10000 };
 			}
 			return t;
 		});
