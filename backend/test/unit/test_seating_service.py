@@ -1,7 +1,6 @@
 import asyncio
 
 import pytest
-
 from src.domain.seating_service import SeatingService
 
 
@@ -366,6 +365,36 @@ async def test_second_queued_request_does_not_warn_an_already_pending_session():
     assert status.vacated == ["s1"]
     assert service.is_seated("s2", 1)  # FIFO: s2 promoted, not s3
     assert service.queue_length == 1
+
+
+async def test_sweep_does_not_warn_more_sessions_than_the_queue_needs():
+    service, status, _ = make_service(num_tables=3)
+    await service.request_seat("s1")
+    await service.request_seat("s2")
+    await service.request_seat("s3")
+    await service.mark_finished_eating("s1")  # all three idle, queue empty
+    await service.mark_finished_eating("s2")  # so nobody's warned yet
+    await service.mark_finished_eating("s3")
+
+    await service.request_seat("s4")  # queues - only one party waiting
+    await asyncio.sleep(0)  # let the warning task run up to its grace sleep
+
+    assert len(status.warned) == 1
+
+    # Repeated sweep ticks must not warn more sessions than are queued,
+    # even though there are three idle candidates available.
+    service._check_for_eviction_candidate()
+    service._check_for_eviction_candidate()
+    service._check_for_eviction_candidate()
+
+    assert len(status.warned) == 1
+    assert service.queue_length == 1
+
+    await service.request_seat("s5")  # queue grows to two parties waiting
+    service._check_for_eviction_candidate()
+    await asyncio.sleep(0)
+
+    assert len(status.warned) == 2
 
 
 def test_invalid_num_tables_raises():

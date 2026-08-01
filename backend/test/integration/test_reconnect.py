@@ -10,7 +10,6 @@ import json
 
 import aiomqtt
 import pytest
-
 from src.config import Settings
 from src.mqtt.client import run_forever
 from src.mqtt.topics import food_topic, order_topic

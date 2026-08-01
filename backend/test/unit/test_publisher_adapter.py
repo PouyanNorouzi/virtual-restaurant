@@ -11,7 +11,6 @@ import json
 from datetime import datetime, timezone
 
 import aiomqtt
-
 from src.domain.models import FoodReady, OrderAccepted
 from src.mqtt.publisher_adapter import (
     MqttFoodPublisher,
@@ -34,7 +33,8 @@ class FakeAiomqttClient:
 
 async def test_food_publisher_publish_accepted_shape():
     client = FakeAiomqttClient()
-    await MqttFoodPublisher(client).publish_accepted(
+    publisher = MqttFoodPublisher(client)  # type: ignore[arg-type]
+    await publisher.publish_accepted(
         OrderAccepted(client_order_id="abc", table_id=2, prep_seconds=17.5)
     )
 
@@ -52,7 +52,8 @@ async def test_food_publisher_publish_accepted_shape():
 
 async def test_food_publisher_publish_food_shape():
     client = FakeAiomqttClient()
-    await MqttFoodPublisher(client).publish_food(
+    publisher = MqttFoodPublisher(client)  # type: ignore[arg-type]
+    await publisher.publish_food(
         FoodReady(
             order_id="o1",
             client_order_id="abc",
@@ -73,8 +74,9 @@ async def test_food_publisher_publish_food_shape():
 
 async def test_food_publisher_swallows_publish_errors():
     client = FakeAiomqttClient(raise_on_publish=True)
+    publisher = MqttFoodPublisher(client)  # type: ignore[arg-type]
     # Should not raise - a failed publish is logged, not propagated.
-    await MqttFoodPublisher(client).publish_accepted(
+    await publisher.publish_accepted(
         OrderAccepted(client_order_id="abc", table_id=1, prep_seconds=1.0)
     )
     assert not client.published
@@ -82,7 +84,9 @@ async def test_food_publisher_swallows_publish_errors():
 
 async def test_rejection_publisher_shape():
     client = FakeAiomqttClient()
-    await MqttRejectionPublisher(client).publish_rejected(3, "abc", "empty_food_name")
+    await MqttRejectionPublisher(client).publish_rejected(  # type: ignore[arg-type]
+        3, "abc", "empty_food_name"
+    )
 
     topic, payload, _qos, retain = client.published[0]
     assert topic == "restaurant/table/3/order/rejected"
@@ -96,7 +100,9 @@ async def test_rejection_publisher_shape():
 
 async def test_seating_status_publisher_assigned_omits_queue_position():
     client = FakeAiomqttClient()
-    await MqttSeatingStatusPublisher(client).publish_assigned("sess-1", 2)
+    await MqttSeatingStatusPublisher(client).publish_assigned(  # type: ignore[arg-type]
+        "sess-1", 2
+    )
 
     topic, payload, _qos, retain = client.published[0]
     assert topic == "restaurant/seating/sess-1/status"
@@ -115,7 +121,9 @@ async def test_seating_status_publisher_assigned_omits_queue_position():
 
 async def test_seating_status_publisher_queued_omits_table_id():
     client = FakeAiomqttClient()
-    await MqttSeatingStatusPublisher(client).publish_queued("sess-1", 4)
+    await MqttSeatingStatusPublisher(client).publish_queued(  # type: ignore[arg-type]
+        "sess-1", 4
+    )
 
     _topic, payload, _qos, _retain = client.published[0]
     assert json.loads(payload) == {
@@ -127,7 +135,8 @@ async def test_seating_status_publisher_queued_omits_table_id():
 
 async def test_seating_status_publisher_vacated_omits_both():
     client = FakeAiomqttClient()
-    await MqttSeatingStatusPublisher(client).publish_vacated("sess-1")
+    publisher = MqttSeatingStatusPublisher(client)  # type: ignore[arg-type]
+    await publisher.publish_vacated("sess-1")
 
     _topic, payload, _qos, _retain = client.published[0]
     assert json.loads(payload) == {"schema": "seat.status.v1", "state": "vacated"}
@@ -135,7 +144,7 @@ async def test_seating_status_publisher_vacated_omits_both():
 
 async def test_occupancy_publisher_is_retained():
     client = FakeAiomqttClient()
-    await MqttOccupancyPublisher(client).publish_occupancy(
+    await MqttOccupancyPublisher(client).publish_occupancy(  # type: ignore[arg-type]
         occupied_tables=[1, 3], num_tables=4, queue_length=2
     )
 

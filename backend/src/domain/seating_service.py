@@ -205,6 +205,10 @@ class SeatingService:
     def _check_for_eviction_candidate(self) -> None:
         if not self._queue:
             return
+        if len(self._pending_eviction) >= len(self._queue):
+            # Already warning as many sessions as there are parties waiting
+            # - no need to line up another one yet.
+            return
         candidate = self._sweep_for_eviction_candidate()
         if candidate is not None:
             self._start_eviction(*candidate)

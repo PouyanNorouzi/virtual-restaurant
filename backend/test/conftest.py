@@ -7,13 +7,15 @@ mosquitto/passwd being present (which is gitignored / secrets-managed).
 import asyncio
 import json
 import pathlib
+import socket
 import subprocess
 
 import aiomqtt
 import pytest
-from src.mqtt.topics import seating_request_topic, seating_status_topic
 from testcontainers.core.container import DockerContainer
-from testcontainers.core.waiting_utils import wait_for_logs
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+
+from src.mqtt.topics import seating_request_topic, seating_status_topic
 
 BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
 TEST_PASSWORD = "test-password"
@@ -79,14 +81,29 @@ def _new_mosquitto_container(passwd_file: pathlib.Path) -> DockerContainer:
         )
         .with_volume_mapping(str(passwd_file), "/mosquitto/config/passwd", "ro")
         .with_exposed_ports(1883, 9001)
+        .waiting_for(
+            LogMessageWaitStrategy(r"mosquitto version .* running").with_startup_timeout(30)
+        )
     )
+
+
+def _free_tcp_port() -> int:
+    """Picks a currently-unused host port to pin the restartable broker to
+    - see restartable_mosquitto_broker for why a fixed port matters here.
+    Racy in principle (the port could be grabbed between this returning and
+    the container binding it), but that's the same trick testcontainers'
+    own dynamic port assignment relies on, and it's the container binding
+    it moments later, not another test process.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("", 0))
+        return sock.getsockname()[1]
 
 
 @pytest.fixture(scope="session")
 def mosquitto_broker(mosquitto_passwd_file):
     container = _new_mosquitto_container(mosquitto_passwd_file)
     with container:
-        wait_for_logs(container, "mosquitto version .* running", timeout=30)
         host = container.get_container_host_ip()
         port = int(container.get_exposed_port(1883))
         yield {
@@ -103,10 +120,21 @@ def restartable_mosquitto_broker(mosquitto_passwd_file):
     `mosquitto_broker` every other test shares. Only for tests that need to
     stop/restart/kill the broker itself: if a restart doesn't come back
     cleanly, that must not take down every other test sharing one instance.
+
+    Binds 1883 to a host port picked up front, rather than letting Docker
+    assign one on container start (like `_new_mosquitto_container` does for
+    everyone else): confirmed against this project's Docker daemon that a
+    dynamically-assigned port mapping gets silently reallocated across a
+    `docker restart` (e.g. 32833 -> 32834), while a pinned mapping doesn't
+    move. Since this fixture exists specifically to test surviving a broker
+    restart, a moving port would defeat the point - the backend would have
+    no way to know the broker moved and correctly stay disconnected.
     """
-    container = _new_mosquitto_container(mosquitto_passwd_file)
+    container = (
+        _new_mosquitto_container(mosquitto_passwd_file)
+        .with_bind_ports(1883, _free_tcp_port())
+    )
     with container:
-        wait_for_logs(container, "mosquitto version .* running", timeout=30)
         host = container.get_container_host_ip()
         port = int(container.get_exposed_port(1883))
         yield {
