@@ -1,0 +1,36 @@
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883" # plain MQTT (backend, test tooling)
+      - "9001:9001" # MQTT over WebSockets (frontend/browser clients)
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+    environment:
+      # Only used by the healthcheck below (to authenticate as "backend" and
+      # confirm the broker is actually serving auth'd connections, not just
+      # that the port is open). Must be set for this healthcheck to pass -
+      # see MOSQUITTO_BACKEND_PASSWORD under the backend service.
+      MOSQUITTO_BACKEND_PASSWORD: ${MOSQUITTO_BACKEND_PASSWORD:?set MOSQUITTO_BACKEND_PASSWORD in your environment or an .env file}
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -p 1883 -u backend -P \"$$MOSQUITTO_BACKEND_PASSWORD\" -t healthcheck -m ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    depends_on:
+      broker:
+        condition: service_started
+    environment:
+      BROKER_HOST: broker
+      BROKER_PORT: "1883"
+      BROKER_USERNAME: backend
+      BROKER_PASSWORD: ${MOSQUITTO_BACKEND_PASSWORD:?set MOSQUITTO_BACKEND_PASSWORD in your environment or an .env file}
+      NUM_TABLES: "4"
+      MIN_DELAY_SECONDS: "10"
+      MAX_DELAY_SECONDS: "30"
+    restart: unless-stopped
