@@ -76,6 +76,13 @@ the final "food ready" event.
 point-in-time event; occupancy is retained so a client that just subscribed can
 learn current state immediately.
 
+**A gone session frees its table via two layers, not one.** I publish an
+explicit vacate on tab close (`pagehide`), but browsers don't guarantee that
+flushes - `sendBeacon` would, but it's HTTP-only and this app is MQTT-only.
+A short (5s) MQTT `keepalive` + broker Last Will backs it up, so any vanished
+session gets vacated within seconds either way. See
+[`frontend/README.md`](frontend/README.md)'s "Disconnect handling" section.
+
 ## What I'd improve with more time
 
 - Actually run the integration suite against a live broker+backend.

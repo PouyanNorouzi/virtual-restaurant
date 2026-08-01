@@ -94,6 +94,18 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 			clean: true,
 			reconnectPeriod: 2000,
 			connectTimeout: 10000,
+			// Well below mqtt.js's 60s default. The pagehide handler below is
+			// only a best-effort speedup - browsers don't guarantee a
+			// WebSocket write initiated during pagehide/unload actually
+			// flushes before the tab's network stack is torn down (unlike
+			// sendBeacon/fetch-keepalive, which aren't usable here since
+			// this app is MQTT-over-WebSockets only, no HTTP surface). The
+			// broker's Will (fired ~1.5x keepalive after the last PINGREQ)
+			// is what actually guarantees cleanup, for both tab closes that
+			// silently drop the pagehide publish and for crashes/force-quit/
+			// killed network that never run JS at all - keeping this short
+			// bounds how long a dead session's table looks occupied.
+			keepalive: 5,
 			will: {
 				topic: seatingVacateTopic(this.sessionId),
 				payload: willPayload,
@@ -109,15 +121,30 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 		this.client.on('reconnect', () => this.pushToast('Reconnecting to the restaurant...'));
 		this.client.on('offline', () => this.pushToast('Connection lost - reconnecting...'));
 		this.client.on('error', (err) => console.error('MQTT connection error', err));
+
+		// A clean MQTT disconnect (what client.end() sends) does NOT trigger
+		// the Will, and Svelte's onDestroy only fires on component unmount/
+		// navigation, not on an actual browser tab close - so without this,
+		// closing a tab leaves the table looking occupied until the Will's
+		// keepalive grace period elapses. pagehide fires reliably on tab
+		// close across desktop and mobile browsers (unlike beforeunload,
+		// which also blocks bfcache).
+		window.addEventListener('pagehide', this.vacateAndEnd);
 	}
 
 	destroy(): void {
 		clearInterval(this.cookdownTimer);
+		// start() (and thus the pagehide listener) only ever runs client-side
+		// via onMount, but onDestroy can still fire during SSR with no
+		// matching onMount - guard against `window` not existing there.
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('pagehide', this.vacateAndEnd);
+		}
+		this.vacateAndEnd();
+	}
+
+	private readonly vacateAndEnd = (): void => {
 		if (!this.client) return;
-		// A clean MQTT disconnect (what client.end() sends) does NOT trigger
-		// the Will, so an intentional unmount/navigation needs its own
-		// explicit vacate first - relying on the Will alone only covers
-		// crashes/network drops, not graceful teardown.
 		if (this.assignedTableId !== null) {
 			this.client.publish(
 				seatingVacateTopic(this.sessionId),
@@ -126,7 +153,7 @@ export class MqttRestaurantEngine implements RestaurantEngine {
 			);
 		}
 		this.client.end();
-	}
+	};
 
 	dispatch(action: RestaurantAction): void {
 		switch (action.type) {

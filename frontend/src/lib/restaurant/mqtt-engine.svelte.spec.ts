@@ -269,4 +269,41 @@ describe('MqttRestaurantEngine', () => {
 		expect(JSON.parse((vacateCall as [string, string])[1]).reason).toBe('user_action');
 		expect(fakeClient.end).toHaveBeenCalled();
 	});
+
+	it('publishes an explicit vacate on pagehide (tab close) when currently seated', async () => {
+		const engine = startedEngine();
+		const statusTopic = statusTopicFromFirstSubscribe();
+		fakeClient.emit('message', statusTopic, jsonPayload({ state: 'assigned', table_id: 1 }));
+
+		window.dispatchEvent(new Event('pagehide'));
+
+		const vacateCall = fakeClient.publish.mock.calls.find(
+			([topic]) => topic === statusTopic.replace('status', 'vacate')
+		);
+		expect(vacateCall).toBeDefined();
+		expect(JSON.parse((vacateCall as [string, string])[1]).reason).toBe('user_action');
+		expect(fakeClient.end).toHaveBeenCalled();
+	});
+
+	it('does not publish a vacate on pagehide when never assigned a table', async () => {
+		startedEngine();
+
+		window.dispatchEvent(new Event('pagehide'));
+
+		expect(fakeClient.publish).not.toHaveBeenCalled();
+		expect(fakeClient.end).toHaveBeenCalled();
+	});
+
+	it('does not double-publish a vacate if destroy runs after pagehide already fired', async () => {
+		const engine = startedEngine();
+		const statusTopic = statusTopicFromFirstSubscribe();
+		fakeClient.emit('message', statusTopic, jsonPayload({ state: 'assigned', table_id: 1 }));
+
+		window.dispatchEvent(new Event('pagehide'));
+		fakeClient.publish.mockClear();
+		engine.destroy();
+		window.dispatchEvent(new Event('pagehide'));
+
+		expect(fakeClient.publish).toHaveBeenCalledTimes(1);
+	});
 });

@@ -81,6 +81,21 @@ Open two browser tabs to see two independent customer sessions interact
 (queueing, eviction, etc.); see the backend README's "Finished eating"
 section for the details.
 
+## Disconnect handling
+
+A closed tab should free its table promptly. I use two layers in
+`MqttRestaurantEngine` (`src/lib/restaurant/mqtt-engine.svelte.ts`):
+
+- **`pagehide` (best effort).** Publishes an explicit vacate and ends the
+  connection on tab close/quit/navigation - the same cleanup `destroy()` runs
+  on unmount. Not guaranteed: browsers don't promise a WebSocket write
+  survives unload (unlike `sendBeacon`, which I can't use since this app is
+  MQTT-only).
+- **5s `keepalive` (the real guarantee).** Backs it with a broker Last Will,
+  so any session that vanishes without a clean disconnect gets vacated within
+  ~5-8s regardless. `SeatingService.vacate()` is idempotent, so both layers
+  firing for the same session is safe.
+
 ## Scripts
 
 | Command                       | Purpose                                |

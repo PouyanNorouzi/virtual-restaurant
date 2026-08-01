@@ -11,6 +11,7 @@
 				)
 			: 0
 	);
+	let secondsLeftDisplay = $derived(Math.ceil(engine.state.cookSecondsLeft));
 </script>
 
 {#if visible}
@@ -21,7 +22,7 @@
 			<div class="track">
 				<div class="fill" style:width="{cookPercent}%"></div>
 			</div>
-			<div class="note">Being conceptually prepared — ready in {engine.state.cookSecondsLeft}s</div>
+			<div class="note">Being conceptually prepared — ready in {secondsLeftDisplay}s</div>
 		</div>
 	</div>
 {/if}
